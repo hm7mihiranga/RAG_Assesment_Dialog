@@ -6,7 +6,7 @@ import faiss
 from dataclasses import dataclass
 from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
-from sentence_transformers import SentenceTransformer
+from sentence_transformers import CrossEncoder, SentenceTransformer
 from google import genai
 
 @dataclass
@@ -93,11 +93,43 @@ def retrieve(
 
     return results
 
+
+def rerank_chunks(
+    query: str,
+    candidates: List[Dict[str, Any]],
+    top_k: int,
+    reranker_model_name: str,
+    reranker: Optional[CrossEncoder] = None,
+    min_score: Optional[float] = None,
+) -> List[Dict[str, Any]]:
+    if not candidates:
+        return []
+
+    active_reranker = reranker or CrossEncoder(reranker_model_name)
+    pairs = [(query, c.get("text", "")) for c in candidates]
+    scores = active_reranker.predict(pairs)
+
+    ranked: List[Dict[str, Any]] = []
+    for candidate, score in zip(candidates, scores):
+        row = dict(candidate)
+        row["rerank_score"] = float(score)
+        ranked.append(row)
+
+    ranked.sort(key=lambda x: x["rerank_score"], reverse=True)
+
+    if min_score is not None:
+        ranked = [r for r in ranked if r["rerank_score"] >= min_score]
+
+    return ranked[:max(1, top_k)]
+
 def _format_context(chunks: List[Dict[str, Any]]) -> str:
     parts = []
     for i, ch in enumerate(chunks, 1):
+        rerank_part = ""
+        if "rerank_score" in ch:
+            rerank_part = f" rerank={ch.get('rerank_score', 0.0):.3f}"
         parts.append(
-            f"[{i}] source={ch.get('source', 'unknown')} page={ch.get('page', 0)} score={ch.get('score', 0.0):.3f}\n{ch.get('text', '')}"
+            f"[{i}] source={ch.get('source', 'unknown')} page={ch.get('page', 0)} vector_score={ch.get('score', 0.0):.3f}{rerank_part}\n{ch.get('text', '')}"
         )
     return "\n\n".join(parts)
         
@@ -153,6 +185,7 @@ def answer_with_gemini(
                 "page": c.get("page", 0),
                 "chunk_id": int(c["chunk_id"]),
                 "score": float(c["score"]),
+                "rerank_score": float(c["rerank_score"]) if "rerank_score" in c else None,
             }
             for c in retrieved
         ],

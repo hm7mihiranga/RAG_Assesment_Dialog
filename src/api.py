@@ -12,10 +12,11 @@ from src.rag import (
     answer_with_gemini,
     build_faiss_store,
     load_store,
+    rerank_chunks,
     retrieve,
     save_vector,
 )
-from sentence_transformers import SentenceTransformer
+from sentence_transformers import CrossEncoder, SentenceTransformer
 
 app = FastAPI(title="Document Q&A API (FAISS + Gemini)")
 
@@ -25,6 +26,7 @@ hf_logging.disable_progress_bar()
 logging.getLogger("sentence_transformers").setLevel(logging.ERROR)
 
 embedder = SentenceTransformer(settings.embed_model)
+reranker: Optional[CrossEncoder] = None
 store: Optional[FaissStore] = None
 all_chunks: List[Dict[str, Any]] = []
 
@@ -40,6 +42,13 @@ def _init_store() -> None:
 
 
 _init_store()
+
+
+def _get_reranker() -> CrossEncoder:
+    global reranker
+    if reranker is None:
+        reranker = CrossEncoder(settings.rerank_model)
+    return reranker
 
 
 class AskRequest(BaseModel):
@@ -143,12 +152,21 @@ def ask(req: AskRequest):
         raise HTTPException(status_code=500, detail="GOOGLE_API_KEY is missing in environment")
 
     k = req.top_k or settings.top_k
-    retrieved = retrieve(req.question, store=store, model=embedder, top_k=k)
+    candidate_k = max(k, k * settings.retrieval_pool_multiplier)
+    retrieved = retrieve(req.question, store=store, model=embedder, top_k=candidate_k)
+    reranked = rerank_chunks(
+        query=req.question,
+        candidates=retrieved,
+        top_k=k,
+        reranker_model_name=settings.rerank_model,
+        reranker=_get_reranker(),
+        min_score=settings.rerank_min_score,
+    )
 
     try:
         result = answer_with_gemini(
             query=req.question,
-            retrieved=retrieved,
+            retrieved=reranked,
             google_api_key=settings.google_api_key,
             gemini_model=settings.gemini_model,
         )
