@@ -1,0 +1,176 @@
+import os
+import numpy as np
+import pandas as pd
+import faiss
+
+from dataclasses import dataclass
+from typing import List, Dict, Any, Optional, Tuple
+from pathlib import Path
+from sentence_transformers import SentenceTransformer
+from google import genai
+
+@dataclass
+class FaissStore:
+    index: faiss.Index
+    meta: pd.DataFrame
+    
+def _l2_normalize(x: np.ndarray) -> np.ndarray:
+    norms = np.linalg.norm(x, axis=1, keepdims=True) + 1e-12
+    return x / norms
+
+def build_faiss_store(
+    chunks: List[Dict[str, Any]],
+    embed_model_name: str,
+    model: Optional[SentenceTransformer] = None,
+    normalize: bool = True,
+) -> Tuple[FaissStore, SentenceTransformer]:
+    if not chunks:
+        raise ValueError("No chunks provided for vector store build")
+
+    active_model = model or SentenceTransformer(embed_model_name)
+    texts = [c["text"] for c in chunks]
+
+    emb = active_model.encode(texts, batch_size=64, show_progress_bar=False)
+    emb = np.asarray(emb, dtype=np.float32)
+
+    if normalize:
+        emb = _l2_normalize(emb)
+
+    dim = emb.shape[1]
+    index = faiss.IndexFlatIP(dim)
+    index.add(emb)
+
+    meta = pd.DataFrame(chunks)
+    return FaissStore(index=index, meta=meta), active_model
+
+def save_vector(store: FaissStore, artifacts_dir: str):
+    out = Path(artifacts_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    faiss.write_index(store.index, str(out / "faiss.index"))
+    store.meta.to_parquet(out / "meta.parquet", index=False)
+            
+            
+def load_store(artifacts_dir: str) -> FaissStore:
+    out = Path(artifacts_dir)
+    index_path = out / "faiss.index"
+    meta_path = out / "meta.parquet"
+
+    if not index_path.exists() or not meta_path.exists():
+        raise FileNotFoundError(
+            f"Vector store artifacts not found in '{artifacts_dir}'. Run ingestion first."
+        )
+
+    index = faiss.read_index(str(index_path))
+    meta = pd.read_parquet(meta_path)
+    return FaissStore(index=index, meta=meta)
+
+
+def retrieve(
+    query: str,
+    store: FaissStore,
+    model: SentenceTransformer,
+    top_k: int = 5,
+    normalize: bool = True,
+) -> List[Dict[str, Any]]:
+    q = model.encode([query])
+    q = np.asarray(q, dtype="float32")
+
+    if normalize:
+        q = _l2_normalize(q)
+
+    capped_top_k = max(1, min(top_k, len(store.meta)))
+    scores, ids = store.index.search(q, capped_top_k)
+    scores = scores[0].tolist()
+    ids = ids[0].tolist()
+
+    results = []
+    for score, idx in zip(scores, ids):
+        if idx == -1:
+            continue
+        row = store.meta.iloc[idx].to_dict()
+        row["score"] = float(score)
+        results.append(row)
+
+    return results
+
+def _format_context(chunks: List[Dict[str, Any]]) -> str:
+    parts = []
+    for i, ch in enumerate(chunks, 1):
+        parts.append(
+            f"[{i}] source={ch.get('source', 'unknown')} page={ch.get('page', 0)} score={ch.get('score', 0.0):.3f}\n{ch.get('text', '')}"
+        )
+    return "\n\n".join(parts)
+        
+
+def answer_with_gemini(
+    query: str,
+    retrieved: List[Dict[str, Any]],
+    google_api_key: str,
+    gemini_model: str = "gemini-3-flash-preview",
+) -> Dict[str, Any]:
+    if not retrieved:
+        return {
+            "query": query,
+            "answer": "I don't know",
+            "sources": [],
+        }
+
+    if not google_api_key:
+        raise ValueError("GOOGLE_API_KEY is required to call Gemini")
+
+    client = genai.Client(api_key=google_api_key)
+
+    context = _format_context(retrieved)
+
+    prompt = f"""
+                You are a strict document question-answering assistant.
+                Use ONLY the provided context.
+                If the answer is not explicitly contained in the context, reply exactly: I don't know
+                Do not use outside knowledge.
+                Add citations like [1], [2] for statements you make.
+
+                Context:
+                {context}
+
+                Question:
+                {query}
+
+                Answer (with citations):
+                """.strip()
+
+    response = client.models.generate_content(
+        model=gemini_model,
+        contents=prompt,
+    )
+    text = (getattr(response, "text", "") or "").strip() or "I don't know"
+
+    return {
+        "query": query,
+        "answer": text,
+        "sources": [
+            {
+                "source": c["source"],
+                "page": c.get("page", 0),
+                "chunk_id": int(c["chunk_id"]),
+                "score": float(c["score"]),
+            }
+            for c in retrieved
+        ],
+    }
+
+
+# Backward-compatible aliases for older imports.
+def retrive(query: str, store: FaissStore, model: SentenceTransformer, top_k: int = 5, normalize: bool = True) -> List[Dict[str, Any]]:
+    return retrieve(query=query, store=store, model=model, top_k=top_k, normalize=normalize)
+
+
+def answere_with_gemini(query: str, retrieved: List[Dict[str, Any]], google_api_key: str, gemini_model: str = "gemini-3-flash-preview") -> Dict[str, Any]:
+    return answer_with_gemini(
+        query=query,
+        retrieved=retrieved,
+        google_api_key=google_api_key,
+        gemini_model=gemini_model,
+    )
+
+
+
