@@ -1,8 +1,14 @@
+from pathlib import Path
+
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import os
 
-load_dotenv()
+project_root = Path(__file__).resolve().parents[1]
+load_dotenv(dotenv_path=project_root / ".env", override=True)
+
+def _clean(v: str | None) -> str:
+    return (v or "").strip().strip('"').strip("'")
 
 class Settings(BaseModel):
     google_api_key: str = os.getenv("GOOGLE_API_KEY", "")
