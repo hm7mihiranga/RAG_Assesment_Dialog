@@ -46,9 +46,9 @@ jobs:
 
       - name: Deploy API service
         run: |
-          gcloud run deploy "$SERVICE_API" \
-            --image "$IMAGE" \
-            --region "$REGION" \
+          gcloud run deploy "${{ env.SERVICE_API }}" \
+            --image "${{ env.IMAGE }}" \
+            --region "${{ env.REGION }}" \
             --platform managed \
             --allow-unauthenticated \
             --port 8080 \
@@ -66,15 +66,15 @@ jobs:
 
       - name: Deploy UI service (Streamlit)
         run: |
-          gcloud run deploy "$SERVICE_UI" \
-            --image "$IMAGE" \
-            --region "$REGION" \
+          gcloud run deploy "${{ env.SERVICE_UI }}" \
+            --image "${{ env.IMAGE }}" \
+            --region "${{ env.REGION }}" \
             --platform managed \
             --allow-unauthenticated \
-            --port 8080 \
+            --port 8501 \
             --cpu 1 --memory 512Mi \
             --min-instances 0 --max-instances 1 \
-            --concurrency 1 \
-            --set-env-vars "API_BASE=${API_URL}" \
+            --concurrency 10 \
+            --set-env-vars "API_BASE=${{ env.API_URL }}" \
             --command streamlit \
-            --args "run,ui/app.py,--server.address,0.0.0.0,--server.port,8080,--server.headless,true"
+            --args "run,ui/app.py,--server.port,8501,--server.address,0.0.0.0,--server.headless,true"
