@@ -1,0 +1,80 @@
+name: Deploy to Cloud Run (API + UI)
+
+on:
+  push:
+    branches: ["main"]
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  REGION: ${{ secrets.GCP_REGION }}
+  AR_REPO: ${{ secrets.AR_REPO }}
+  SERVICE_API: dialog-api
+  SERVICE_UI: dialog-ui
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Auth (OIDC)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Configure Docker auth
+        run: gcloud auth configure-docker $REGION-docker.pkg.dev --quiet
+
+      - name: Build & push image (single image)
+        run: |
+          IMAGE="$REGION-docker.pkg.dev/$PROJECT_ID/$AR_REPO/dialog:${GITHUB_SHA}"
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
+
+      - name: Deploy API service
+        run: |
+          gcloud run deploy "$SERVICE_API" \
+            --image "$IMAGE" \
+            --region "$REGION" \
+            --platform managed \
+            --allow-unauthenticated \
+            --port 8080 \
+            --cpu 1 --memory 1Gi \
+            --min-instances 0 --max-instances 1 \
+            --concurrency 20 \
+            --set-env-vars "GOOGLE_API_KEY=${{ secrets.GOOGLE_API_KEY }}" \
+            --command uvicorn \
+            --args "src.api:app,--host,0.0.0.0,--port,8080"
+
+      - name: Read API URL
+        run: |
+          API_URL="$(gcloud run services describe "$SERVICE_API" --region "$REGION" --format='value(status.url)')"
+          echo "API_URL=$API_URL" >> $GITHUB_ENV
+
+      - name: Deploy UI service (Streamlit)
+        run: |
+          gcloud run deploy "$SERVICE_UI" \
+            --image "$IMAGE" \
+            --region "$REGION" \
+            --platform managed \
+            --allow-unauthenticated \
+            --port 8080 \
+            --cpu 1 --memory 512Mi \
+            --min-instances 0 --max-instances 1 \
+            --concurrency 1 \
+            --set-env-vars "API_BASE=${API_URL}" \
+            --command streamlit \
+            --args "run,ui/app.py,--server.address,0.0.0.0,--server.port,8080,--server.headless,true"
