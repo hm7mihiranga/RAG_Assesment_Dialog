@@ -39,7 +39,7 @@ jobs:
 
       - name: Build & push image (single image)
         run: |
-          IMAGE="$REGION-docker.pkg.dev/$PROJECT_ID/$AR_REPO/dialog:${GITHUB_SHA}"
+          IMAGE="${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.AR_REPO }}/dialog:${{ github.sha }}"
           docker build -t "$IMAGE" .
           docker push "$IMAGE"
           echo "IMAGE=$IMAGE" >> $GITHUB_ENV
