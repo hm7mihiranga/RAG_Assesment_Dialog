@@ -24,6 +24,7 @@ class Settings(BaseModel):
     memory_turns_per_session: int = 8
     memory_query_turns: int = 3
     memory_prompt_turns: int = 4
+    memory_context_turns: int = 3
 
 settings = Settings()
 

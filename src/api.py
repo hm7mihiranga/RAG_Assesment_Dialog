@@ -6,7 +6,7 @@ from typing import List, Optional, Dict, Any
 from transformers.utils import logging as hf_logging
 from collections import OrderedDict, deque
 from uuid import uuid4
-from pathlib import path
+from pathlib import Path
 
 from src.config import settings
 from src.ingest import make_chunks, make_text_doc, parse_uploaded_file
@@ -22,15 +22,15 @@ from src.rag import (
 )
 from sentence_transformers import CrossEncoder, SentenceTransformer
 
-# This for Memory Store
-conversation_memory: OrderedDict[str, deque[Dict[str, str]]] = OrderedDict()
-
 app = FastAPI(title="Document Q&A API (FAISS + Gemini)")
 
 # Keep startup logs quiet for expected HuggingFace checkpoint key mismatches.
 hf_logging.set_verbosity_error()
 hf_logging.disable_progress_bar()
 logging.getLogger("sentence_transformers").setLevel(logging.ERROR)
+
+# This for Memory Store
+conversation_memory: OrderedDict[str, deque[Dict[str, str]]] = OrderedDict()
 
 embedder = SentenceTransformer(settings.embed_model)
 reranker: Optional[CrossEncoder] = None
@@ -50,6 +50,19 @@ def _touch_session(conversation_id: Optional[str]) -> str:
 
     conversation_memory[sid] = deque(maxlen=settings.memory_turns_per_session)
     return sid
+
+
+def _get_history(sid: str) -> List[Dict[str, str]]:
+    return list(conversation_memory.get(sid, []))
+
+
+def _append_history(sid: str, question: str, answer: str) -> None:
+    if sid not in conversation_memory:
+        _touch_session(sid)
+    conversation_memory[sid].append({"question": question, "answer": answer})
+    conversation_memory.move_to_end(sid)
+    
+    
 
 def _history_to_temp_chunks(history: List[Dict[str, str]], max_turns: int) -> List[Dict[str, Any]]:
     if not history:
@@ -72,15 +85,21 @@ def _history_to_temp_chunks(history: List[Dict[str, str]], max_turns: int) -> Li
     return out
 
 
-def _get_history(sid: str) -> List[Dict[str, str]]:
-    return list(conversation_memory.get(sid, []))
+def _delete_artifacts() -> None:
+    out = Path(settings.artifacts_dir)
+    for name in ("faiss.index", "meta.parquet"):
+        p = out / name
+        if p.exists():
+            p.unlink()
+            
 
-
-def _append_history(sid: str, question: str, answer: str) -> None:
-    if sid not in conversation_memory:
-        _touch_session(sid)
-    conversation_memory[sid].append({"question": question, "answer": answer})
-    conversation_memory.move_to_end(sid)
+def _reset_runtime_state(clear_artifacts: bool = False) -> None:
+    global store, all_chunks
+    store = None
+    all_chunks = []
+    conversation_memory.clear()
+    if clear_artifacts:
+        _delete_artifacts()
 
 
 def _init_store() -> None:
@@ -120,6 +139,11 @@ class IngestResponse(BaseModel):
     docs_added: int
     chunks_added: int
     total_chunks: int
+    
+class SessionCloseResponse(BaseModel):
+    status: str
+    cleared_chunks: int
+    cleared_sessions: int
 
 
 @app.get("/")
@@ -137,7 +161,7 @@ def favicon():
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "chunks": len(all_chunks)}
+    return {"status": "ok", "chunks": len(all_chunks), "sessions": len(conversation_memory)}
 
 
 @app.post("/ingest", response_model=IngestResponse)
@@ -183,13 +207,20 @@ async def ingest(
     if not new_chunks:
         raise HTTPException(status_code=400, detail="No usable text could be extracted")
 
-    base_chunk_id = len(all_chunks)
-    for idx, chunk in enumerate(new_chunks):
-        chunk["chunk_id"] = base_chunk_id + idx
 
-    all_chunks.extend(new_chunks)
-    store, _ = build_faiss_store(all_chunks, settings.embed_model, model=embedder)
-    save_vector(store, settings.artifacts_dir)
+    for idx, chunk in enumerate(new_chunks):
+        chunk["chunk_id"] = idx
+        
+    try:
+        new_store, _ = build_faiss_store(new_chunks, settings.embed_model, model=embedder)
+        save_vector(new_store, settings.artifacts_dir)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to build vector store: {exc}") from exc
+
+    store = new_store
+    all_chunks = new_chunks
+    
+    conversation_memory.clear()
 
     return IngestResponse(
         docs_added=len(docs),
@@ -250,3 +281,14 @@ def ask(req: AskRequest):
     result["conversation_id"] = session_id
 
     return result
+
+@app.post("/session/close", response_model=SessionCloseResponse)
+def close_session():
+    cleared_chunks = len(all_chunks)
+    cleared_sessions = len(conversation_memory)
+    _reset_runtime_state(clear_artifacts=True)
+    return SessionCloseResponse(
+        status="Cleared all session data and artifacts",
+        cleared_chunks=cleared_chunks,
+        cleared_sessions=cleared_sessions,
+    )
