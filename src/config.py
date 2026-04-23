@@ -18,6 +18,12 @@ class Settings(BaseModel):
     rerank_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     rerank_min_score: float | None = None
     gemini_model: str = "gemini-3-flash-preview"
+    
+    # Conversational Memory Implementation
+    memory_max_sessions: int = 200
+    memory_turns_per_session: int = 8
+    memory_query_turns: int = 3
+    memory_prompt_turns: int = 4
 
 settings = Settings()
 

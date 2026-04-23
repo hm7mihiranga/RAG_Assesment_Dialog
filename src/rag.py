@@ -132,14 +132,41 @@ def _format_context(chunks: List[Dict[str, Any]]) -> str:
             f"[{i}] source={ch.get('source', 'unknown')} page={ch.get('page', 0)} vector_score={ch.get('score', 0.0):.3f}{rerank_part}\n{ch.get('text', '')}"
         )
     return "\n\n".join(parts)
-        
 
-def answer_with_gemini(
-    query: str,
-    retrieved: List[Dict[str, Any]],
-    google_api_key: str,
-    gemini_model: str = "gemini-3-flash-preview",
-) -> Dict[str, Any]:
+
+# Conversational Memory Implementation
+def build_retrieval_query(question: str, conversation_history: Optional[List[Dict[str, str]]] = None, max_turns: int = 3) -> str:
+    if not conversation_history:
+        return question
+    
+    recent = conversation_history[-max(1, max_turns):]
+    prev_questions = [
+        t.get("question", "").strip()
+        for t in recent
+        if t.get("question", "").strip()
+    ]
+    if not prev_questions:
+        return question
+    
+    return("Previous user questions:\n" + "\n".join(f"- {q}" for q in prev_questions) + f"\nCurrent question:\n{question}")
+
+def _format_conversation_history(conversation_history: Optional[List[Dict[str, str]]] = None, max_turns: int = 4) -> str:
+    if not conversation_history:
+        return "No prior conversation history."
+    
+    recent = conversation_history[-max(1, max_turns):]
+    lines = []
+    for i, turn in enumerate(recent, 1):
+        q = turn.get("question", "").strip()
+        a = turn.get("answer", "").strip()
+        lines.append(f"Turns {i} Question: {q}")
+        lines.append(f"Turns {i} Answer: {a}")
+        
+    return "\n".join(lines)
+
+
+
+def answer_with_gemini(query: str, retrieved: List[Dict[str, Any]], google_api_key: str, gemini_model: str = "gemini-3-flash-preview", conversation_history: Optional[List[Dict[str, str]]] = None, history_turns: int = 4,) -> Dict[str, Any]:
     if not retrieved:
         return {
             "query": query,
@@ -149,6 +176,11 @@ def answer_with_gemini(
 
     if not google_api_key:
         raise ValueError("GOOGLE_API_KEY is required to call Gemini")
+    
+    history_text = _format_conversation_history(
+        conversation_history=conversation_history,
+        max_turns=history_turns,
+    )
 
     client = genai.Client(api_key=google_api_key)
 
@@ -160,6 +192,9 @@ def answer_with_gemini(
                 If the answer is not explicitly contained in the context, reply exactly: I don't know
                 Do not use outside knowledge.
                 Add citations like [1], [2] for statements you make.
+                
+                Conversation history:
+                {history_text}
 
                 Context:
                 {context}

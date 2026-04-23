@@ -4,6 +4,9 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, Response, Uploa
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from transformers.utils import logging as hf_logging
+from collections import OrderedDict, deque
+from uuid import uuid4
+from pathlib import path
 
 from src.config import settings
 from src.ingest import make_chunks, make_text_doc, parse_uploaded_file
@@ -11,12 +14,16 @@ from src.rag import (
     FaissStore,
     answer_with_gemini,
     build_faiss_store,
+    build_retrieval_query,
     load_store,
     rerank_chunks,
     retrieve,
     save_vector,
 )
 from sentence_transformers import CrossEncoder, SentenceTransformer
+
+# This for Memory Store
+conversation_memory: OrderedDict[str, deque[Dict[str, str]]] = OrderedDict()
 
 app = FastAPI(title="Document Q&A API (FAISS + Gemini)")
 
@@ -29,6 +36,51 @@ embedder = SentenceTransformer(settings.embed_model)
 reranker: Optional[CrossEncoder] = None
 store: Optional[FaissStore] = None
 all_chunks: List[Dict[str, Any]] = []
+
+
+def _touch_session(conversation_id: Optional[str]) -> str:
+    sid = (conversation_id or str(uuid4())).strip()
+
+    if sid in conversation_memory:
+        conversation_memory.move_to_end(sid)
+        return sid
+
+    if len(conversation_memory) >= settings.memory_max_sessions:
+        conversation_memory.popitem(last=False)
+
+    conversation_memory[sid] = deque(maxlen=settings.memory_turns_per_session)
+    return sid
+
+def _history_to_temp_chunks(history: List[Dict[str, str]], max_turns: int) -> List[Dict[str, Any]]:
+    if not history:
+        return []
+    
+    recent = history[-max(1, max_turns):]
+    out: List[Dict[str, Any]] = []
+    for i, turn in enumerate(recent, 1):
+        user_text = (turn.get("question") or "").strip()
+        if not user_text:
+            continue
+        out.append({
+            "source": "chat_memory",
+            "page": 0,
+            "chunk_id": -i,
+            "chunk_idx": i,
+            "score":0.0,
+            "text":f"User prior turn {i}: {user_text}",
+        })
+    return out
+
+
+def _get_history(sid: str) -> List[Dict[str, str]]:
+    return list(conversation_memory.get(sid, []))
+
+
+def _append_history(sid: str, question: str, answer: str) -> None:
+    if sid not in conversation_memory:
+        _touch_session(sid)
+    conversation_memory[sid].append({"question": question, "answer": answer})
+    conversation_memory.move_to_end(sid)
 
 
 def _init_store() -> None:
@@ -54,9 +106,11 @@ def _get_reranker() -> CrossEncoder:
 class AskRequest(BaseModel):
     question: str
     top_k: Optional[int] = None
+    conversation_id: Optional[str] = None
 
 
 class AskResponse(BaseModel):
+    conversation_id: str
     query: str
     answer: str
     sources: List[Dict[str, Any]]
@@ -150,13 +204,30 @@ def ask(req: AskRequest):
 
     if not settings.google_api_key:
         raise HTTPException(status_code=500, detail="GOOGLE_API_KEY is missing in environment")
+    
+    session_id = _touch_session(req.conversation_id)
+    history = _get_history(session_id)
 
     k = req.top_k or settings.top_k
     candidate_k = max(k, k * settings.retrieval_pool_multiplier)
-    retrieved = retrieve(req.question, store=store, model=embedder, top_k=candidate_k)
+    
+    retrieval_query = build_retrieval_query(
+        question=req.question,
+        conversation_history=history,
+        max_turns=settings.memory_query_turns,
+    )
+    
+    retrieved = retrieve(retrieval_query, store=store, model=embedder, top_k=candidate_k)
+    
+    temp_memory_chunks = _history_to_temp_chunks(
+        history=history,
+        max_turns=max(1, getattr(settings, "memory_context_turns", 3)),
+    )
+    candidates = retrieved + temp_memory_chunks
+    
     reranked = rerank_chunks(
         query=req.question,
-        candidates=retrieved,
+        candidates=candidates,
         top_k=k,
         reranker_model_name=settings.rerank_model,
         reranker=_get_reranker(),
@@ -169,8 +240,13 @@ def ask(req: AskRequest):
             retrieved=reranked,
             google_api_key=settings.google_api_key,
             gemini_model=settings.gemini_model,
+            conversation_history=history,
+            history_turns=settings.memory_prompt_turns,
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"LLM call failed: {exc}") from exc
+    
+    _append_history(session_id, req.question, result["answer"])
+    result["conversation_id"] = session_id
 
     return result
