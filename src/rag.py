@@ -150,7 +150,7 @@ def _format_conversation_history(conversation_history: Optional[List[Dict[str, s
 
 
 
-def answer_with_gemini(query: str, retrieved: List[Dict[str, Any]], google_api_key: str, gemini_model: str = "gemini-3-flash-preview", conversation_history: Optional[List[Dict[str, str]]] = None, history_turns: int = 4,) -> Dict[str, Any]:
+def answer_with_gemini(query: str, retrieved: List[Dict[str, Any]], google_api_key: str, gemini_model: str = "gemini-3.1-flash-lite-preview", conversation_history: Optional[List[Dict[str, str]]] = None, history_turns: int = 4,) -> Dict[str, Any]:
     if not retrieved:
         return {
             "query": query,
@@ -216,7 +216,7 @@ def retrive(query: str, store: FaissStore, model: SentenceTransformer, top_k: in
     return retrieve(query=query, store=store, model=model, top_k=top_k, normalize=normalize)
 
 
-def answere_with_gemini(query: str, retrieved: List[Dict[str, Any]], google_api_key: str, gemini_model: str = "gemini-3-flash-preview") -> Dict[str, Any]:
+def answere_with_gemini(query: str, retrieved: List[Dict[str, Any]], google_api_key: str, gemini_model: str = "gemini-3.1-flash-lite-preview") -> Dict[str, Any]:
     return answer_with_gemini(
         query=query,
         retrieved=retrieved,
