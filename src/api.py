@@ -24,7 +24,7 @@ from sentence_transformers import CrossEncoder, SentenceTransformer
 
 app = FastAPI(title="Document Q&A API (FAISS + Gemini)")
 
-# Keep startup logs quiet for expected HuggingFace checkpoint key mismatches.
+# HF Error Explanation, disable downloading progress bars, and access the sentence_transformers
 hf_logging.set_verbosity_error()
 hf_logging.disable_progress_bar()
 logging.getLogger("sentence_transformers").setLevel(logging.ERROR)
@@ -52,8 +52,10 @@ def _touch_session(conversation_id: Optional[str]) -> str:
     return sid
 
 
+
 def _get_history(sid: str) -> List[Dict[str, str]]:
     return list(conversation_memory.get(sid, []))
+
 
 
 def _append_history(sid: str, question: str, answer: str) -> None:

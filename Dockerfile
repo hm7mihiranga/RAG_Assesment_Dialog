@@ -10,4 +10,4 @@ COPY ui ./ui
 COPY data ./data
 COPY artifacts ./artifacts
 
-EXPOSE 8010 8501
+EXPOSE 8080 8501

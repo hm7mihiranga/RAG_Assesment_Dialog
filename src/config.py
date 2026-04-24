@@ -34,6 +34,6 @@ class Settings(BaseModel):
 
 settings = Settings()
 
-if __name__ == "__main__":
-    print("Configuration loaded successfully:")
+# if __name__ == "__main__":
+#     print("Configuration loaded successfully:")
     

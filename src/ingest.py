@@ -5,9 +5,7 @@ from io import BytesIO
 from pypdf import PdfReader
 
 def load_document(data_dir: str) -> List[Dict]:
-    '''
-    Returns list of dictionary (source, page, text): supports only .pdf and .txt
-    '''
+    # Returns list of dictionary (source, page, text): supports only .pdf and .txt
     
     docs = []
     root = Path(data_dir)
@@ -47,9 +45,7 @@ def chunk_text(text: str, chunk_size: int = 900, overlap: int = 150) -> List[str
 
 
 def make_chunks(docs: List[Dict], chunk_size: int, overlap: int) -> List[Dict]:
-    '''
-    Output chunk rows with metadata: {chunk_id, source, page, chunk_idx, text}
-    '''
+   # Output chunk rows with metadata: {chunk_id, source, page, chunk_idx, text}
     
     out = []
     cid = 0
@@ -93,5 +89,5 @@ def parse_uploaded_file(filename: str, content: bytes) -> List[Dict]:
     raise ValueError("Unsupported file type. Only .txt and .pdf are allowed.")
 
 
-if __name__ == "__main__":
-    print("Ingest module loaded successfully")
+# if __name__ == "__main__":
+#     print("Ingest module loaded successfully")

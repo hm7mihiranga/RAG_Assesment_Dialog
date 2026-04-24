@@ -11,7 +11,6 @@ from sentence_transformers import CrossEncoder, SentenceTransformer
 from google import genai
 
 
-
 @dataclass
 class FaissStore:
     index: faiss.Index
@@ -21,12 +20,7 @@ def _l2_normalize(x: np.ndarray) -> np.ndarray:
     norms = np.linalg.norm(x, axis=1, keepdims=True) + 1e-12
     return x / norms
 
-def build_faiss_store(
-    chunks: List[Dict[str, Any]],
-    embed_model_name: str,
-    model: Optional[SentenceTransformer] = None,
-    normalize: bool = True,
-) -> Tuple[FaissStore, SentenceTransformer]:
+def build_faiss_store(chunks: List[Dict[str, Any]], embed_model_name: str, model: Optional[SentenceTransformer] = None, normalize: bool = True,) -> Tuple[FaissStore, SentenceTransformer]:
     if not chunks:
         raise ValueError("No chunks provided for vector store build")
 
@@ -68,13 +62,7 @@ def load_store(artifacts_dir: str) -> FaissStore:
     return FaissStore(index=index, meta=meta)
 
 
-def retrieve(
-    query: str,
-    store: FaissStore,
-    model: SentenceTransformer,
-    top_k: int = 5,
-    normalize: bool = True,
-) -> List[Dict[str, Any]]:
+def retrieve(query: str, store: FaissStore, model: SentenceTransformer, top_k: int = 5, normalize: bool = True,) -> List[Dict[str, Any]]:
     q = model.encode([query])
     q = np.asarray(q, dtype="float32")
 
@@ -97,14 +85,7 @@ def retrieve(
     return results
 
 
-def rerank_chunks(
-    query: str,
-    candidates: List[Dict[str, Any]],
-    top_k: int,
-    reranker_model_name: str,
-    reranker: Optional[CrossEncoder] = None,
-    min_score: Optional[float] = None,
-) -> List[Dict[str, Any]]:
+def rerank_chunks( query: str, candidates: List[Dict[str, Any]], top_k: int, reranker_model_name: str, reranker: Optional[CrossEncoder] = None, min_score: Optional[float] = None,) -> List[Dict[str, Any]]:
     if not candidates:
         return []
 
@@ -230,7 +211,7 @@ def answer_with_gemini(query: str, retrieved: List[Dict[str, Any]], google_api_k
     }
 
 
-# Backward-compatible aliases for older imports.
+# Backward-compatible aliases for older imports handling
 def retrive(query: str, store: FaissStore, model: SentenceTransformer, top_k: int = 5, normalize: bool = True) -> List[Dict[str, Any]]:
     return retrieve(query=query, store=store, model=model, top_k=top_k, normalize=normalize)
 
